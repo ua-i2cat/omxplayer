@@ -124,6 +124,7 @@ protected:
   double                    m_aspect;
   int                       m_width;
   int                       m_height;
+  bool			    m_streams_sync;
   void Lock();
   void UnLock();
   bool SetActiveStreamInternal(OMXStreamType type, unsigned int index);
@@ -132,7 +133,7 @@ private:
 public:
   OMXReader();
   ~OMXReader();
-  bool Open(std::string filename, bool dump_format, bool live = false, float timeout = 0.0f, std::string cookie = "", std::string user_agent = "", std::string lavfdopts = "", std::string avdict = "");
+  bool Open(std::string filename, bool dump_format, bool live = false, float timeout = 0.0f, std::string cookie = "", std::string user_agent = "", std::string lavfdopts = "", std::string avdict = "", bool streams_sync = false);
   void ClearStreams();
   bool Close();
   //void FlushRead();

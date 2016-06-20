@@ -134,16 +134,17 @@ static offset_t dvd_file_seek(void *h, offset_t pos, int whence)
     return pFile->Seek(pos, whence & ~AVSEEK_FORCE);
 }
 
-bool OMXReader::Open(std::string filename, bool dump_format, bool live /* =false */, float timeout /* = 0.0f */, std::string cookie /* = "" */, std::string user_agent /* = "" */, std::string lavfdopts /* = "" */, std::string avdict /* = "" */)
+bool OMXReader::Open(std::string filename, bool dump_format, bool live /* =false */, float timeout /* = 0.0f */, std::string cookie /* = "" */, std::string user_agent /* = "" */, std::string lavfdopts /* = "" */, std::string avdict /* = "" */, bool streams_sync /*=false*/)
 {
   if (!m_dllAvUtil.Load() || !m_dllAvCodec.Load() || !m_dllAvFormat.Load())
     return false;
 
   timeout_default_duration = (int64_t) (timeout * 1e9);
-  m_iCurrentPts = DVD_NOPTS_VALUE;
-  m_filename    = filename; 
-  m_speed       = DVD_PLAYSPEED_NORMAL;
-  m_program     = UINT_MAX;
+  m_iCurrentPts  = DVD_NOPTS_VALUE;
+  m_filename     = filename;
+  m_speed        = DVD_PLAYSPEED_NORMAL;
+  m_program      = UINT_MAX;
+  m_streams_sync = streams_sync;
   const AVIOInterruptCB int_cb = { interrupt_cb, NULL };
   RESET_TIMEOUT(3);
 
@@ -1081,15 +1082,26 @@ double OMXReader::ConvertTimestamp(int64_t pts, int den, int num)
   // do calculations in floats as they can easily overflow otherwise
   // we don't care for having a completly exact timestamp anyway
   double timestamp = (double)pts * num  / den;
-  double starttime = 0.0f;
 
-  if (m_pFormatContext->start_time != (int64_t)AV_NOPTS_VALUE)
-    starttime = (double)m_pFormatContext->start_time / AV_TIME_BASE;
+  if(m_streams_sync)
+  {
+    double starttimerealtime = 0.0f;
+    if (m_pFormatContext->start_time != (int64_t)AV_NOPTS_VALUE)
+      starttimerealtime = (double)m_pFormatContext->start_time_realtime/AV_TIME_BASE;
 
-  if(timestamp > starttime)
-    timestamp -= starttime;
-  else if( timestamp + 0.1f > starttime )
-    timestamp = 0;
+    timestamp += starttimerealtime;
+  }
+  else
+  {
+    double starttime = 0.0f;
+    if (m_pFormatContext->start_time != (int64_t)AV_NOPTS_VALUE)
+      starttime = (double)m_pFormatContext->start_time / AV_TIME_BASE;
+
+    if(timestamp > starttime)
+      timestamp -= starttime;
+    else if( timestamp + 0.1f > starttime )
+      timestamp = 0;
+  }
 
   return timestamp*DVD_TIME_BASE;
 }

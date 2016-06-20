@@ -451,10 +451,9 @@ static int get_mem_gpu(void)
    return gpu_mem;
 }
 
-static void blank_background(uint32_t rgba)
+static void blank_background(bool enable)
 {
-  // if alpha is fully transparent then background has no effect
-  if (!(rgba & 0xff000000))
+  if (!enable)
     return;
   // we create a 1x1 black pixel image that is added to display just behind video
   DISPMANX_DISPLAY_HANDLE_T   display;
@@ -463,7 +462,8 @@ static void blank_background(uint32_t rgba)
   DISPMANX_ELEMENT_HANDLE_T   element;
   int             ret;
   uint32_t vc_image_ptr;
-  VC_IMAGE_TYPE_T type = VC_IMAGE_ARGB8888;
+  VC_IMAGE_TYPE_T type = VC_IMAGE_RGB565;
+  uint16_t image = 0x0000; // black
   int             layer = m_config_video.layer - 1;
 
   VC_RECT_T dst_rect, src_rect;
@@ -476,7 +476,7 @@ static void blank_background(uint32_t rgba)
 
   vc_dispmanx_rect_set( &dst_rect, 0, 0, 1, 1);
 
-  ret = vc_dispmanx_resource_write_data( resource, type, sizeof(rgba), &rgba, &dst_rect );
+  ret = vc_dispmanx_resource_write_data( resource, type, sizeof(image), &image, &dst_rect );
   assert(ret == 0);
 
   vc_dispmanx_rect_set( &src_rect, 0, 0, 1<<16, 1<<16);
@@ -515,7 +515,8 @@ int main(int argc, char *argv[])
   FORMAT_3D_T           m_3d                  = CONF_FLAGS_FORMAT_NONE;
   bool                  m_refresh             = false;
   double                startpts              = 0;
-  uint32_t              m_blank_background    = 0;
+  bool                  m_blank_background    = false;
+  bool			m_streams_sync	      = false;
   bool sentStarted = false;
   float m_threshold      = -1.0f; // amount of audio/video required to come out of buffering
   float m_timeout        = 10.0f; // amount of time file/network operation can stall for before timing out
@@ -569,6 +570,7 @@ int main(int argc, char *argv[])
   const int http_user_agent_opt = 0x301;
   const int lavfdopts_opt   = 0x400;
   const int avdict_opt      = 0x401;
+  const int streams_sync_opt = 0x500;
 
   struct option longopts[] = {
     { "info",         no_argument,        NULL,          'i' },
@@ -596,7 +598,7 @@ int main(int argc, char *argv[])
     { "genlog",       no_argument,        NULL,          'g' },
     { "sid",          required_argument,  NULL,          't' },
     { "pos",          required_argument,  NULL,          'l' },    
-    { "blank",        optional_argument,  NULL,          'b' },
+    { "blank",        no_argument,        NULL,          'b' },
     { "font",         required_argument,  NULL,          font_opt },
     { "italic-font",  required_argument,  NULL,          italic_font_opt },
     { "font-size",    required_argument,  NULL,          font_size_opt },
@@ -631,6 +633,7 @@ int main(int argc, char *argv[])
     { "user-agent",   required_argument,  NULL,          http_user_agent_opt },
     { "lavfdopts",    required_argument,  NULL,          lavfdopts_opt },
     { "avdict",       required_argument,  NULL,          avdict_opt },
+    { "streams-sync", no_argument,	  NULL,		 streams_sync_opt},
     { 0, 0, 0, 0 }
   };
 
@@ -646,7 +649,7 @@ int main(int argc, char *argv[])
   //Build default keymap just in case the --key-config option isn't used
   map<int,int> keymap = KeyConfig::buildDefaultKeymap();
 
-  while ((c = getopt_long(argc, argv, "wiIhvkn:l:o:cslb::pd3:Myzt:rg", longopts, NULL)) != -1)
+  while ((c = getopt_long(argc, argv, "wiIhvkn:l:o:cslbpd3:Myzt:rg", longopts, NULL)) != -1)
   {
     switch (c) 
     {
@@ -865,7 +868,7 @@ int main(int argc, char *argv[])
         m_loop = true;
         break;
       case 'b':
-        m_blank_background = optarg ? strtoul(optarg, NULL, 0) : 0xff000000;
+        m_blank_background = true;
         break;
       case key_config_opt:
         keymap = KeyConfig::parseConfigFile(optarg);
@@ -890,6 +893,9 @@ int main(int argc, char *argv[])
         break;
       case avdict_opt:
         m_avdict = optarg;
+        break;
+      case streams_sync_opt:
+        m_streams_sync = true;
         break;
       case 0:
         break;
@@ -1010,7 +1016,7 @@ int main(int argc, char *argv[])
     m_keyboard->setDbusName(m_dbus_name);
   }
 
-  if(!m_omx_reader.Open(m_filename.c_str(), m_dump_format, m_config_audio.is_live, m_timeout, m_cookie.c_str(), m_user_agent.c_str(), m_lavfdopts.c_str(), m_avdict.c_str()))
+  if(!m_omx_reader.Open(m_filename.c_str(), m_dump_format, m_config_audio.is_live, m_timeout, m_cookie.c_str(), m_user_agent.c_str(), m_lavfdopts.c_str(), m_avdict.c_str(), m_streams_sync))
     goto do_exit;
 
   if (m_dump_format_exit)
@@ -1084,6 +1090,10 @@ int main(int argc, char *argv[])
     m_config_video.hints.orientation = m_orientation;
   if(m_has_video && !m_player_video.Open(m_av_clock, m_config_video))
     goto do_exit;
+
+  //CAMBIOS AJH
+  //m_player_video.SetDelay(60000.0);
+  //
 
   if(m_has_subtitle || m_osd)
   {
@@ -1175,7 +1185,7 @@ int main(int argc, char *argv[])
 
      if (update) {
        OMXControlResult result = control_err
-                               ? (OMXControlResult)(m_keyboard ? m_keyboard->getEvent() : KeyConfig::ACTION_BLANK)
+                               ? (OMXControlResult)m_keyboard->getEvent()
                                : m_omxcontrol.getEvent();
        double oldPos, newPos;
 
@@ -1414,21 +1424,7 @@ int main(int argc, char *argv[])
       case KeyConfig::ACTION_SET_ALPHA:
           m_player_video.SetAlpha(result.getArg());
           break;
-      case KeyConfig::ACTION_PLAY:
-        m_Pause=false;
-        if(m_has_subtitle)
-        {
-          m_player_subtitles.Resume();
-        }
-        break;
       case KeyConfig::ACTION_PAUSE:
-        m_Pause=true;
-        if(m_has_subtitle)
-        {
-          m_player_subtitles.Pause();
-        }
-        break;
-      case KeyConfig::ACTION_PLAYPAUSE:
         m_Pause = !m_Pause;
         if (m_av_clock->OMXPlaySpeed() != DVD_PLAYSPEED_NORMAL && m_av_clock->OMXPlaySpeed() != DVD_PLAYSPEED_PAUSE)
         {
@@ -1727,6 +1723,9 @@ int main(int argc, char *argv[])
     if(!m_omx_pkt)
       m_omx_pkt = m_omx_reader.Read();
 
+    if(m_streams_sync)
+      m_av_clock->OMXMediaTime(ceil(m_omx_pkt->pts)-1500000);
+
     if(m_omx_pkt)
       m_send_eos = false;
 
@@ -1850,12 +1849,8 @@ do_exit:
 
   printf("have a nice day ;)\n");
 
-  // exit status success on playback end
-  if (m_send_eos)
-    return EXIT_SUCCESS;
-  // exit status OMXPlayer defined value on user quit
-  if (m_stop)
-    return 3;
-  // exit status failure on other cases
-  return EXIT_FAILURE;
+  // normal exit status on user quit or playback end
+  if (m_stop || m_send_eos)
+    return 0;
+  return 1;
 }
